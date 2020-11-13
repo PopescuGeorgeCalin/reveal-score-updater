@@ -1,0 +1,42 @@
+image: docker:latest
+
+# REPO_NAME
+# TASK_DEFINTION_NAME
+# SERVICE_NAME
+
+variables:
+  REPOSITORY_URL: ${ECR_REPO}/${REPO_NAME}
+
+services:
+  - docker:dind
+
+before_script:
+  - apk add --no-cache jq py-pip
+  - pip install awscli
+  - $(aws ecr get-login --no-include-email --region "${AWS_DEFAULT_REGION}")
+  - IMAGE_TAG="$(echo $CI_COMMIT_SHA | head -c 8)"
+
+stages:
+  - build
+  - deploy
+
+build:
+  stage: build
+  script:
+    - docker build -t $REPOSITORY_URL:latest .
+    - docker tag $REPOSITORY_URL:latest $REPOSITORY_URL:$IMAGE_TAG
+    - docker push $REPOSITORY_URL:latest
+    - docker push $REPOSITORY_URL:$IMAGE_TAG
+  only:
+    - master
+
+deploy:
+  stage: deploy
+  when: manual
+  script:
+    - TASK_DEFINITION=$(aws ecs describe-task-definition --task-definition "$TASK_DEFINTION_NAME" --region "${AWS_DEFAULT_REGION}")
+    - NEW_TASK_DEFINTIION=$(echo $TASK_DEFINITION | jq --arg IMAGE "$REPOSITORY_URL:$IMAGE_TAG" '.taskDefinition | .containerDefinitions[0].image = $IMAGE | del(.taskDefinitionArn) | del(.revision) | del(.status) | del(.requiresAttributes) | del(.compatibilities)')
+    - aws ecs register-task-definition --region "${AWS_DEFAULT_REGION}" --cli-input-json "$NEW_TASK_DEFINTIION"
+    - aws ecs update-service --region "${AWS_DEFAULT_REGION}" --cluster "${CLUSTER_NAME}" --service "${SERVICE_NAME}" --task-definition "${TASK_DEFINTION_NAME}" --desired-count 1
+  only:
+    - master

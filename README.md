@@ -1,1 +1,1 @@
-# score-updater-middleware
+# reveal-score-updater
